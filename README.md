@@ -65,8 +65,8 @@ The LangGraph graph consists of:
 ### 1. Clone the repository
 
 ```bash
-git clone <your-repo-url>
-cd <your-repo-folder>
+git clone https://github.com/DevDoshi19/langgraph-memory-chatbot.git
+cd https://github.com/DevDoshi19/langgraph-memory-chatbot.git
 ```
 
 ### 2. Install dependencies
