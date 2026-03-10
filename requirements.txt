@@ -1,3 +1,4 @@
+ddgs
 langchain
 langchain-groq
 langchain-core
@@ -6,5 +7,5 @@ pydantic
 langgraph
 python-dotenv
 langchain-community
-ddgs
+duckduckgo-search
 langgraph-checkpoint-sqlite

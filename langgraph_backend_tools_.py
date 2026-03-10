@@ -84,7 +84,7 @@ def chat_node(state: ChatState) -> str:
 
 tool_node = ToolNode(tools)
 
-conn = sqlite3.connect(database="chat_history.db",check_same_thread=False)
+conn = sqlite3.connect(database="/tmp/chat_history.db", check_same_thread=False)
 checkpointer = SqliteSaver(conn=conn)
 
 
