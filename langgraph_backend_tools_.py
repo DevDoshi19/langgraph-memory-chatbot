@@ -4,7 +4,7 @@ from langgraph.graph import StateGraph ,START, END
 from langchain_groq import ChatGroq
 from langchain_core.messages import BaseMessage ,HumanMessage
 from langgraph.graph.message import add_messages
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph_checkpoint_sqlite import SqliteSaver
 from typing import TypedDict ,Annotated
 from dotenv import load_dotenv
 import sqlite3

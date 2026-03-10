@@ -7,3 +7,4 @@ langgraph
 python-dotenv
 langchain-community
 ddgs
+langgraph-checkpoint-sqlite
