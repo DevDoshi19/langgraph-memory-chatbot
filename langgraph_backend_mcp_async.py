@@ -1,19 +1,41 @@
-from urllib import response
-from langgraph.graph import StateGraph ,START, END
 from langchain_groq import ChatGroq
+from langgraph.graph import StateGraph ,START, END
 from langchain_core.messages import BaseMessage ,HumanMessage
 from langgraph.graph.message import add_messages
-from langgraph.checkpoint.sqlite import SqliteSaver
-from typing import TypedDict ,Annotated
-from dotenv import load_dotenv
-import sqlite3
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.prebuilt import ToolNode,tools_condition
 from langchain_community.tools import DuckDuckGoSearchRun
-from langchain_core.tools import tool
+from langchain_core.tools import tool , BaseTool
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from urllib import response
+from typing import TypedDict ,Annotated
+from dotenv import load_dotenv
+import threading
+import sqlite3
+import asyncio
+import aiosqlite
 import requests
 import os
 
 load_dotenv()
+
+# Dedicated async loop for backend tasks
+_ASYNC_LOOP = asyncio.new_event_loop()
+_ASYNC_THREAD = threading.Thread(target=_ASYNC_LOOP.run_forever, daemon=True)
+_ASYNC_THREAD.start()
+
+
+def _submit_async(coro):
+    return asyncio.run_coroutine_threadsafe(coro, _ASYNC_LOOP)
+
+
+def run_async(coro):
+    return _submit_async(coro).result()
+
+
+def submit_async_task(coro):
+    """Schedule a coroutine on the backend event loop."""
+    return _submit_async(coro)
 
 llm = ChatGroq(model="openai/gpt-oss-20b", temperature=0.7)
 
@@ -63,26 +85,46 @@ def get_weather_data(city: str) -> str:
     else:
         return {"error": f"Could not fetch weather data for {city}. Please try again later."}
     
+client = MultiServerMCPClient({
+    "expense": {
+            "transport": "streamable_http",  # if this fails, try "sse"
+            "url": "https://splendid-gold-dingo.fastmcp.app/mcp"
+        }
+})
+
+def load_mcp_tools()-> list[BaseTool]:
+    """Load tools from MCP and bind them to the LLM."""
+    try:
+        return run_async(client.get_tools())
+    except Exception :
+        return []
+
+mcp_tools = load_mcp_tools()
+
 # make a list of tools 
-tools = [search_tool, calculator, get_stock_price, get_weather_data]
+tools = [search_tool, calculator, get_stock_price, get_weather_data] + mcp_tools
 
 # make the llm tool-aware
-llm_with_tools = llm.bind_tools(tools)
+llm_with_tools = llm.bind_tools(tools) if tools else llm
 
 #-------------------------------------------
 class ChatState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     
-def chat_node(state: ChatState) -> str:
+async def chat_node(state: ChatState) -> str:
     messages = state["messages"]
-    response = llm_with_tools.invoke(messages)
+    response = await llm_with_tools.ainvoke(messages)
     return {"messages": [response]}
 
 tool_node = ToolNode(tools)
 
-conn = sqlite3.connect(database="/tmp/chat_history.db", check_same_thread=False)
-checkpointer = SqliteSaver(conn=conn)
+async def _init_checkpointer():
+    conn = await aiosqlite.connect(database="/tmp/chat_history.db", check_same_thread=False)
+    return AsyncSqliteSaver(conn=conn)
 
+checkpointer = run_async(_init_checkpointer())
+
+# Initialize the graph and compile the chatbot
 
 graph = StateGraph(ChatState)
 
@@ -95,29 +137,21 @@ graph.add_edge('tools', 'chat_node')
 
 chatbot = graph.compile(checkpointer=checkpointer)
 
-try:
-    graph_png = chatbot.get_graph().draw_mermaid_png()
-    graph_image_path = os.path.join(os.path.dirname(__file__), "graph_visualization.png")
-    with open(graph_image_path, "wb") as image_file:
-        image_file.write(graph_png)
-except Exception as e:
-    print(f"Unable to save graph image: {e}")
-
-def retrieve_all_thread_ids():
-    """Retrieve all unique thread IDs from the database"""
+async def _alist_thread_ids():
+    """Async helper to retrieve all unique thread IDs"""
+    threads = set()
+    
     try:
-        threads = set()
-        for checkpoint in checkpointer.list(None):
+        async for checkpoint in checkpointer.alist(None):
             config = checkpoint.config
             if config and 'configurable' in config and 'thread_id' in config['configurable']:
                 threads.add(config['configurable']['thread_id'])
                 
-        return list(threads)
-
     except Exception as e:
         print(f"Error retrieving thread IDs: {e}")
-        return []
-    
-# out = chatbot.invoke({"messages": [HumanMessage(content="Hi how are you ?")]},
-#                      config={"configurable": {"thread_id": "thread-2"}})
-# print(out["messages"][-1].content)
+        
+    return list(threads)
+
+def retrieve_all_thread_ids():
+    """Sync wrapper — safe to call from Streamlit"""
+    return run_async(_alist_thread_ids())

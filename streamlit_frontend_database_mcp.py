@@ -1,6 +1,6 @@
 import streamlit as st
 from langgraph_backend_tools_ import chatbot , retrieve_all_thread_ids
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage ,ToolMessage
 import uuid
 from langgraph_chatname import name_chat_id
 
@@ -169,16 +169,30 @@ if user_input:
     # Get AI response and display it
     with st.chat_message('assistant'):
         try:
+            status_holder = {"box": None}
             def ai_only_stream():
                 for message_chunk, metadata in chatbot.stream(
-                    {"messages": [HumanMessage(content=user_input)]},
-                    config=CONFIG,
-                    stream_mode="messages"
+                {"messages": [HumanMessage(content=user_input)]},
+                config=CONFIG,
+                stream_mode="messages",
                 ):
-                    
-                    if isinstance(message_chunk, AIMessage):
-                        # yield only assistant token
-                        yield message_chunk.content
+                    # Lazily create & update the SAME status container when any tool runs
+                    if isinstance(message_chunk, ToolMessage):
+                        tool_name = getattr(message_chunk, "name", "tool")
+                        if status_holder["box"] is None:
+                            status_holder["box"] = st.status(
+                                f"🔧 Using `{tool_name}` …", expanded=True
+                            )
+                        else:
+                            status_holder["box"].update(
+                                label=f"🔧 Using `{tool_name}` …",
+                                state="running",
+                                expanded=True,
+                            )
+
+                # Stream ONLY assistant tokens
+                if isinstance(message_chunk, AIMessage):
+                    yield message_chunk.content
             
             ai_message = st.write_stream(ai_only_stream())
             
