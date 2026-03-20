@@ -12,6 +12,7 @@ from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_core.tools import tool
 import requests
 import os
+import asyncio 
 
 load_dotenv()
 
@@ -73,50 +74,53 @@ llm_with_tools = llm.bind_tools(tools)
 class ChatState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     
-def chat_node(state: ChatState) -> str:
-    messages = state["messages"]
-    response = llm_with_tools.invoke(messages)
-    return {"messages": [response]}
+def build_graph():
+    
+    async def chat_node(state: ChatState) -> str:
+        messages = state["messages"]
+        response = await llm_with_tools.ainvoke(messages)
+        return {"messages": [response]}
 
-tool_node = ToolNode(tools)
+    tool_node = ToolNode(tools)
 
-conn = sqlite3.connect(database="/tmp/chat_history.db", check_same_thread=False)
-checkpointer = SqliteSaver(conn=conn)
+    # conn = sqlite3.connect(database="/tmp/chat_history.db", check_same_thread=False)
+    # checkpointer = SqliteSaver(conn=conn)
 
 
-graph = StateGraph(ChatState)
+    graph = StateGraph(ChatState)
 
-graph.add_node("chat_node", chat_node)
-graph.add_node("tools", tool_node)
+    graph.add_node("chat_node", chat_node)
+    graph.add_node("tools", tool_node)
 
-graph.add_edge(START, "chat_node")
-graph.add_conditional_edges("chat_node",tools_condition)
-graph.add_edge('tools', 'chat_node')
+    graph.add_edge(START, "chat_node")
+    graph.add_conditional_edges("chat_node",tools_condition)
+    graph.add_edge('tools', 'chat_node')
 
-chatbot = graph.compile(checkpointer=checkpointer)
+    chatbot = graph.compile()  # Removed checkpointer since it's commented out
+    
+    return chatbot 
 
-try:
-    graph_png = chatbot.get_graph().draw_mermaid_png()
-    graph_image_path = os.path.join(os.path.dirname(__file__), "graph_visualization.png")
-    with open(graph_image_path, "wb") as image_file:
-        image_file.write(graph_png)
-except Exception as e:
-    print(f"Unable to save graph image: {e}")
+async def main():
+    
+    chatbot = build_graph()
+    
+    
+    result = await chatbot.ainvoke({"messages": [HumanMessage(content="Hi how are you ?")]})
+    print(result["messages"][-1].content)
+    
+if __name__ == "__main__":
+    asyncio.run(main())
+    
 
-def retrieve_all_thread_ids():
-    """Retrieve all unique thread IDs from the database"""
-    try:
-        threads = set()
-        for checkpoint in checkpointer.list(None):
-            config = checkpoint.config
-            if config and 'configurable' in config and 'thread_id' in config['configurable']:
-                threads.add(config['configurable']['thread_id'])
-                
-        return list(threads)
+## use to genrate an image of the graph visualization, but it is not working in the current environment.
+# try:
+#     graph_png = chatbot.get_graph().draw_mermaid_png()
+#     graph_image_path = os.path.join(os.path.dirname(__file__), "graph_visualization.png")
+#     with open(graph_image_path, "wb") as image_file:
+#         image_file.write(graph_png)
+# except Exception as e:
+#     print(f"Unable to save graph image: {e}")
 
-    except Exception as e:
-        print(f"Error retrieving thread IDs: {e}")
-        return []
     
 # out = chatbot.invoke({"messages": [HumanMessage(content="Hi how are you ?")]},
 #                      config={"configurable": {"thread_id": "thread-2"}})
