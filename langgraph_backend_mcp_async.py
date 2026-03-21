@@ -118,8 +118,12 @@ async def chat_node(state: ChatState) -> str:
 
 tool_node = ToolNode(tools)
 
+import os
+
+DB_PATH = os.path.join(os.path.dirname(__file__), "chat_history.db")
+
 async def _init_checkpointer():
-    conn = await aiosqlite.connect(database="/tmp/chat_history.db", check_same_thread=False)
+    conn = await aiosqlite.connect(database=DB_PATH, check_same_thread=False)
     return AsyncSqliteSaver(conn=conn)
 
 checkpointer = run_async(_init_checkpointer())
@@ -152,6 +156,6 @@ async def _alist_thread_ids():
         
     return list(threads)
 
-def retrieve_all_thread_ids():
+def retrieve_all_threads():
     """Sync wrapper — safe to call from Streamlit"""
     return run_async(_alist_thread_ids())

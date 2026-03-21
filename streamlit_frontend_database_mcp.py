@@ -1,5 +1,6 @@
+import queue
 import streamlit as st
-from langgraph_backend_tools_ import chatbot , retrieve_all_thread_ids
+from langgraph_backend_mcp_async import submit_async_task,chatbot, retrieve_all_threads
 from langchain_core.messages import HumanMessage, AIMessage ,ToolMessage
 import uuid
 from langgraph_chatname import name_chat_id
@@ -80,7 +81,7 @@ if 'thread_id' not in st.session_state:
     st.session_state['thread_id'] = generate_thread_id()
     
 if 'chat_thread' not in st.session_state:
-    st.session_state['chat_thread'] = retrieve_all_thread_ids()
+    st.session_state['chat_thread'] = retrieve_all_threads()
 
 if "chat_titles" not in st.session_state:
     st.session_state["chat_titles"] = {}
@@ -92,7 +93,7 @@ add_thread_id(st.session_state['thread_id'])
 CONFIG = {'configurable': {'thread_id': st.session_state['thread_id']}}
 
 #----------------------------------- sidebar ------------------------------------
-st.sidebar.title("Langgraph Chatbot")
+st.sidebar.title("Multicapable Chatbot")
 
 if st.sidebar.button('New Chat', use_container_width=True):
     reset_chat()
@@ -154,57 +155,82 @@ for message in st.session_state['message_history']:
 
 # Chat input
 user_input = st.chat_input("Type your message here...")
-
 if user_input:
-    # Update CONFIG with current thread_id before sending message
     CONFIG = {'configurable': {'thread_id': st.session_state['thread_id']}}
-    
-    # Add user message to history
+
     st.session_state['message_history'].append({'role': 'user', 'content': user_input})
-    
-    # Display user message
+
     with st.chat_message('user'):
         st.markdown(user_input)
 
-    # Get AI response and display it
-    with st.chat_message('assistant'):
-        try:
-            status_holder = {"box": None}
-            def ai_only_stream():
-                for message_chunk, metadata in chatbot.stream(
-                {"messages": [HumanMessage(content=user_input)]},
-                config=CONFIG,
-                stream_mode="messages",
-                ):
-                    # Lazily create & update the SAME status container when any tool runs
-                    if isinstance(message_chunk, ToolMessage):
-                        tool_name = getattr(message_chunk, "name", "tool")
-                        if status_holder["box"] is None:
-                            status_holder["box"] = st.status(
-                                f"🔧 Using `{tool_name}` …", expanded=True
-                            )
-                        else:
-                            status_holder["box"].update(
-                                label=f"🔧 Using `{tool_name}` …",
-                                state="running",
-                                expanded=True,
-                            )
+    with st.chat_message("assistant"):
+        status_holder = {"box": None}
 
-                # Stream ONLY assistant tokens
-                if isinstance(message_chunk, AIMessage):
+        def ai_only_stream():
+            event_queue = queue.Queue()
+
+            async def run_stream():
+                try:
+                    async for message_chunk, metadata in chatbot.astream(
+                        {"messages": [HumanMessage(content=user_input)]},
+                        config=CONFIG,
+                        stream_mode="messages",
+                    ):
+                        event_queue.put((message_chunk, metadata))
+                except Exception as exc:
+                    event_queue.put(("error", exc))
+                finally:
+                    event_queue.put(None)
+
+            # Submit async task OUTSIDE of run_stream
+            submit_async_task(run_stream())
+
+            while True:
+                item = event_queue.get()
+                if item is None:
+                    break
+
+                message_chunk, metadata = item
+
+                if message_chunk == "error":
+                    raise metadata
+
+                # Show tool status when a tool runs
+                if isinstance(message_chunk, ToolMessage):
+                    tool_name = getattr(message_chunk, "name", "tool")
+                    if status_holder["box"] is None:
+                        status_holder["box"] = st.status(
+                            f"🔧 Using `{tool_name}` …", expanded=True
+                        )
+                    else:
+                        status_holder["box"].update(
+                            label=f"🔧 Using `{tool_name}` …",
+                            state="running",
+                            expanded=True,
+                        )
+
+                # Yield only assistant tokens
+                if isinstance(message_chunk, AIMessage) and message_chunk.content:
                     yield message_chunk.content
-            
+
+        try:
             ai_message = st.write_stream(ai_only_stream())
-            
-            # Add AI response to history
-            st.session_state['message_history'].append({'role': 'assistant', 'content': ai_message})
-            
-            # Force title regeneration after first message
+
+            # Finalize tool status box if it was used
+            if status_holder["box"] is not None:
+                status_holder["box"].update(
+                    label="✅ Tool finished", state="complete", expanded=False
+                )
+
+            # Save assistant message
+            st.session_state['message_history'].append(
+                {'role': 'assistant', 'content': ai_message}
+            )
+
+            # Regenerate chat title after first exchange
             current_thread = st.session_state['thread_id']
-            if current_thread in st.session_state["chat_titles"]:
-                if st.session_state["chat_titles"][current_thread] == "New Chat":
-                    # Regenerate title after first exchange
-                    st.session_state["chat_titles"][current_thread] = generate_chat_title(current_thread)
-                        
+            if st.session_state["chat_titles"].get(current_thread) == "New Chat":
+                st.session_state["chat_titles"][current_thread] = generate_chat_title(current_thread)
+
         except Exception as e:
             st.error(f"Error getting response: {e}")
