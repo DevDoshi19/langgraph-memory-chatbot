@@ -111,17 +111,3 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
     
-
-## use to genrate an image of the graph visualization, but it is not working in the current environment.
-# try:
-#     graph_png = chatbot.get_graph().draw_mermaid_png()
-#     graph_image_path = os.path.join(os.path.dirname(__file__), "graph_visualization.png")
-#     with open(graph_image_path, "wb") as image_file:
-#         image_file.write(graph_png)
-# except Exception as e:
-#     print(f"Unable to save graph image: {e}")
-
-    
-# out = chatbot.invoke({"messages": [HumanMessage(content="Hi how are you ?")]},
-#                      config={"configurable": {"thread_id": "thread-2"}})
-# print(out["messages"][-1].content)
